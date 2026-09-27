@@ -21,10 +21,10 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"legal-bench-api/internal/auth"
-	"legal-bench-api/internal/db"
-	"legal-bench-api/internal/objectstore"
-	"legal-bench-api/internal/resumeparser"
+	"legal-roster-api/internal/auth"
+	"legal-roster-api/internal/db"
+	"legal-roster-api/internal/objectstore"
+	"legal-roster-api/internal/resumeparser"
 )
 
 const (

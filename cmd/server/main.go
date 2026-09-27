@@ -12,12 +12,12 @@ import (
 
 	"github.com/joho/godotenv"
 
-	"legal-bench-api/internal/config"
-	"legal-bench-api/internal/database"
-	"legal-bench-api/internal/db"
-	"legal-bench-api/internal/email"
-	"legal-bench-api/internal/httpserver"
-	"legal-bench-api/internal/objectstore"
+	"legal-roster-api/internal/config"
+	"legal-roster-api/internal/database"
+	"legal-roster-api/internal/db"
+	"legal-roster-api/internal/email"
+	"legal-roster-api/internal/httpserver"
+	"legal-roster-api/internal/objectstore"
 )
 
 func main() {

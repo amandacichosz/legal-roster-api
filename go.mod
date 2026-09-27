@@ -1,4 +1,4 @@
-module legal-bench-api
+module legal-roster-api
 
 go 1.26.0
 

@@ -9,9 +9,9 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
-	"legal-bench-api/internal/auth"
-	"legal-bench-api/internal/config"
-	"legal-bench-api/internal/db"
+	"legal-roster-api/internal/auth"
+	"legal-roster-api/internal/config"
+	"legal-roster-api/internal/db"
 )
 
 func bootstrapPlatformAdmin(ctx context.Context, cfg config.Config, queries *db.Queries) error {

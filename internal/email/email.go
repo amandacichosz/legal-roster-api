@@ -5,7 +5,7 @@ import (
 	"net/smtp"
 	"strings"
 
-	"legal-bench-api/internal/config"
+	"legal-roster-api/internal/config"
 )
 
 type Mailer struct {

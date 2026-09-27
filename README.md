@@ -1,4 +1,4 @@
-# legal-bench-api
+# legal-roster-api
 
 Go backend for the Legal Bench Vue app in `../legal-bench`.
 
@@ -143,9 +143,9 @@ pnpm build
 Then build and run the API:
 
 ```sh
-cd ../legal-bench-api
-go build -o bin/legal-bench-api ./cmd/server
-./bin/legal-bench-api
+cd ../legal-roster-api
+go build -o bin/legal-roster-api ./cmd/server
+./bin/legal-roster-api
 ```
 
 Set `DATABASE_URL` to your managed Postgres connection string in production.
