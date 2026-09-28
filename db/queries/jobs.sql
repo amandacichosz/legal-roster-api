@@ -78,14 +78,14 @@ SELECT
 	job_applications.updated_at
 FROM job_applications
 JOIN job_postings ON job_postings.id = job_applications.job_posting_id
-WHERE ($1 = '' OR job_applications.status = $1)
+WHERE (sqlc.arg(status)::text = '' OR job_applications.status = sqlc.arg(status)::text)
 ORDER BY job_applications.created_at DESC, job_applications.id DESC
-LIMIT $2 OFFSET $3;
+LIMIT sqlc.arg(page_limit) OFFSET sqlc.arg(page_offset);
 
 -- name: CountJobApplications :one
 SELECT COUNT(*)::bigint
 FROM job_applications
-WHERE ($1 = '' OR status = $1);
+WHERE (sqlc.arg(status)::text = '' OR status = sqlc.arg(status)::text);
 
 -- name: GetJobApplicationForHire :one
 SELECT

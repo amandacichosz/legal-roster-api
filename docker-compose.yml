@@ -1,21 +1,23 @@
+name: legal-roster
+
 services:
   postgres:
     image: postgres:17-alpine
-    container_name: legal-bench-postgres
+    container_name: legal-roster-postgres
     restart: unless-stopped
     environment:
-      POSTGRES_DB: legal_bench
-      POSTGRES_USER: legal_bench
-      POSTGRES_PASSWORD: legal_bench_dev_password
+      POSTGRES_DB: legal_roster
+      POSTGRES_USER: legal_roster
+      POSTGRES_PASSWORD: legal_roster_dev_password
     ports:
       - "5432:5432"
     volumes:
-      - legal_bench_postgres_data:/var/lib/postgresql/data
+      - legal_roster_postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U legal_bench -d legal_bench"]
+      test: ["CMD-SHELL", "pg_isready -U legal_roster -d legal_roster"]
       interval: 5s
       timeout: 5s
       retries: 10
 
 volumes:
-  legal_bench_postgres_data:
+  legal_roster_postgres_data:

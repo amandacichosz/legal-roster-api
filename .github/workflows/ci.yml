@@ -1,0 +1,127 @@
+name: CI and deploy
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: api-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Migrate, test, and build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: legal_roster_ci
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d legal_roster_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/legal_roster_ci?sslmode=disable
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Create Supabase Auth schema fixture
+        env:
+          PGPASSWORD: postgres
+        run: |
+          psql -h localhost -U postgres -d legal_roster_ci -v ON_ERROR_STOP=1 <<'SQL'
+          CREATE SCHEMA auth;
+          CREATE TABLE auth.users (
+            id UUID PRIMARY KEY,
+            email TEXT,
+            raw_user_meta_data JSONB NOT NULL DEFAULT '{}'::jsonb
+          );
+          SQL
+
+      - name: Apply database migrations
+        run: go run github.com/pressly/goose/v3/cmd/goose -dir db/migrations postgres "$DATABASE_URL" up
+
+      - name: Verify migration status
+        run: go run github.com/pressly/goose/v3/cmd/goose -dir db/migrations postgres "$DATABASE_URL" status
+
+      - name: Run tests
+        run: go test ./...
+
+      - name: Build server
+        run: CGO_ENABLED=0 go build -trimpath -o bin/legal-roster-api ./cmd/server
+
+      - name: Upload server binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: legal-roster-api
+          path: bin/legal-roster-api
+          if-no-files-found: error
+          retention-days: 7
+
+  migrate-production:
+    name: Migrate production database
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: verify
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Apply production migrations
+        env:
+          DATABASE_URL: ${{ secrets.PRODUCTION_DATABASE_URL }}
+        run: |
+          test -n "$DATABASE_URL"
+          go run github.com/pressly/goose/v3/cmd/goose -dir db/migrations postgres "$DATABASE_URL" up
+
+      - name: Verify production migration status
+        env:
+          DATABASE_URL: ${{ secrets.PRODUCTION_DATABASE_URL }}
+        run: go run github.com/pressly/goose/v3/cmd/goose -dir db/migrations postgres "$DATABASE_URL" status
+
+  deploy:
+    name: Deploy to Render
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: migrate-production
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 5
+    steps:
+      - name: Trigger Render deploy
+        env:
+          RENDER_DEPLOY_HOOK_URL: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
+        run: |
+          test -n "$RENDER_DEPLOY_HOOK_URL"
+          curl --fail --show-error --silent --request POST "${RENDER_DEPLOY_HOOK_URL}&ref=${GITHUB_SHA}"

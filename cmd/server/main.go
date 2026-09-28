@@ -14,7 +14,6 @@ import (
 
 	"legal-roster-api/internal/config"
 	"legal-roster-api/internal/database"
-	"legal-roster-api/internal/db"
 	"legal-roster-api/internal/email"
 	"legal-roster-api/internal/httpserver"
 	"legal-roster-api/internal/objectstore"
@@ -34,11 +33,12 @@ func main() {
 	}
 	defer pool.Close()
 
-	queries := db.New(pool)
-	if err := bootstrapPlatformAdmin(ctx, cfg, queries); err != nil {
-		logger.Error("bootstrap platform admin", "error", err)
+	var databaseVersion string
+	if err := pool.QueryRow(ctx, "SELECT version()").Scan(&databaseVersion); err != nil {
+		logger.Error("query database version", "error", err)
 		os.Exit(1)
 	}
+	logger.Info("connected to database", "version", databaseVersion)
 
 	resumeStore, err := objectstore.New(cfg)
 	if err != nil {
@@ -48,7 +48,7 @@ func main() {
 
 	server := &http.Server{
 		Addr:              ":" + cfg.Port,
-		Handler:           httpserver.New(pool, cfg.StaticDir, cfg.CORSOrigins, cfg.FrontendURL, cfg.SessionCookieSecure, email.NewMailer(cfg), resumeStore, logger),
+		Handler:           httpserver.New(pool, cfg.StaticDir, cfg.CORSOrigins, cfg.FrontendURL, cfg.SessionCookieSecure, email.NewMailer(cfg), resumeStore, cfg.SupabaseURL, cfg.SupabasePublishableKey, logger),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 

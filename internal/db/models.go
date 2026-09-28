@@ -86,38 +86,6 @@ type JobPosting struct {
 	UpdatedAt      time.Time `json:"updated_at"`
 }
 
-type Session struct {
-	ID        int64     `json:"id"`
-	UserID    int64     `json:"user_id"`
-	TokenHash string    `json:"token_hash"`
-	ExpiresAt time.Time `json:"expires_at"`
-	CreatedAt time.Time `json:"created_at"`
-}
-
-type User struct {
-	ID           int64     `json:"id"`
-	Email        string    `json:"email"`
-	PasswordHash string    `json:"password_hash"`
-	Name         string    `json:"name"`
-	Role         string    `json:"role"`
-	Status       string    `json:"status"`
-	CreatedAt    time.Time `json:"created_at"`
-	UpdatedAt    time.Time `json:"updated_at"`
-}
-
-type UserInvitation struct {
-	ID         int64              `json:"id"`
-	Email      string             `json:"email"`
-	Name       string             `json:"name"`
-	Role       string             `json:"role"`
-	TokenHash  string             `json:"token_hash"`
-	InvitedBy  int64              `json:"invited_by"`
-	AcceptedBy pgtype.Int8        `json:"accepted_by"`
-	ExpiresAt  time.Time          `json:"expires_at"`
-	AcceptedAt pgtype.Timestamptz `json:"accepted_at"`
-	CreatedAt  time.Time          `json:"created_at"`
-}
-
 type ResumeFile struct {
 	ID               int64     `json:"id"`
 	PublicID         string    `json:"public_id"`
@@ -126,4 +94,14 @@ type ResumeFile struct {
 	ContentType      string    `json:"content_type"`
 	SizeBytes        int64     `json:"size_bytes"`
 	CreatedAt        time.Time `json:"created_at"`
+}
+
+type User struct {
+	ID        string    `json:"id"`
+	Email     string    `json:"email"`
+	Name      string    `json:"name"`
+	Role      string    `json:"role"`
+	Status    string    `json:"status"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }

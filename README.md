@@ -1,6 +1,6 @@
 # legal-roster-api
 
-Go backend for the Legal Bench Vue app in `../legal-bench`.
+Go backend for the Legal Bench Vue app in `../legal-roster`.
 
 The service uses PostgreSQL with `pgx`, SQLC-generated query code, Goose migrations,
 and Docker Compose for local database development. In production, point `DATABASE_URL`
@@ -41,26 +41,52 @@ Run migrations:
 
 ```sh
 export $(grep -v '^#' .env | xargs)
-go run github.com/pressly/goose/v3/cmd/goose@latest -dir db/migrations postgres "$DATABASE_URL" up
+go run github.com/pressly/goose/v3/cmd/goose -dir db/migrations postgres "$DATABASE_URL" up
 ```
 
-## First Admin
+## Supabase Database
 
-The login page does not allow public account creation. Bootstrap the first `platform_admin` with these optional `.env` values:
+The API can run against Supabase Postgres by setting `DATABASE_URL` to the shared
+pooler connection string with TLS enabled. Use session mode on port `5432` for
+migrations and other administrative commands:
 
 ```sh
-BOOTSTRAP_PLATFORM_ADMIN_EMAIL=admin@example.com
-BOOTSTRAP_PLATFORM_ADMIN_PASSWORD=change-this-strong-password
-BOOTSTRAP_PLATFORM_ADMIN_NAME=Platform Admin
+export DATABASE_URL='postgresql://postgres.imbsitvagnpgsubgcyql:YOUR-PERCENT-ENCODED-PASSWORD@aws-0-us-west-2.pooler.supabase.com:5432/postgres?sslmode=require'
 ```
 
-After the first platform admin is created, remove those bootstrap values from `.env`.
+If the database password contains special characters, percent-encode them before
+placing it in the URL.
+
+Run the existing Goose migrations against Supabase:
+
+```sh
+go run github.com/pressly/goose/v3/cmd/goose -dir db/migrations postgres "$DATABASE_URL" up
+```
+
+For the production API, either keep session mode or use the shared transaction
+pooler by changing the port to `6543`. Keep the local Docker database URL in
+`.env` for local-only development if you do not want your development server
+writing to Supabase.
+
+## Supabase Auth
+
+The frontend signs users in with Supabase Auth and sends the access token to the
+Go API. Configure the API with:
+
+```sh
+SUPABASE_URL=https://YOUR_PROJECT_REF.supabase.co
+SUPABASE_PUBLISHABLE_KEY=sb_publishable_...
+```
+
+Configure the Vue frontend with the corresponding `VITE_SUPABASE_URL` and
+`VITE_SUPABASE_PUBLISHABLE_KEY` values. Keep public sign-up disabled. New identities
+created through Supabase Auth are synchronized into `public.users` as disabled
+admins and must be enabled by an existing administrator.
 
 ## User Management
 
-A `platform_admin` can manage users from the Users panel. Inviting a user creates an activation link where the user sets their password. Users are disabled instead of deleted so account history stays intact.
-
-When SMTP is configured, the API sends the activation email. In local development without SMTP, the API returns and logs the activation link.
+Both `platform_admin` and `admin` users can access the admin section. They can
+assign either role and enable or disable application access from the Users panel.
 
 ## Resume Object Storage
 
@@ -79,11 +105,29 @@ Production should use an S3-compatible private bucket, for example AWS S3, Cloud
 OBJECT_STORAGE_PROVIDER=s3
 OBJECT_STORAGE_ENDPOINT=https://s3.amazonaws.com
 OBJECT_STORAGE_REGION=us-east-1
-OBJECT_STORAGE_BUCKET=legal-bench-resumes
+OBJECT_STORAGE_BUCKET=legal-roster-resumes
 OBJECT_STORAGE_ACCESS_KEY_ID=example-access-key
 OBJECT_STORAGE_SECRET_ACCESS_KEY=example-secret-key
 OBJECT_STORAGE_FORCE_PATH_STYLE=true
 ```
+
+Cloudflare R2 can also be configured directly with its standard values:
+
+```sh
+R2_ACCOUNT_ID=example-account-id
+R2_BUCKET=legal-roster-resumes
+R2_ACCESS_KEY_ID=example-access-key
+R2_SECRET_ACCESS_KEY=example-secret-key
+```
+
+When these values are present, the API automatically uses the R2 S3 endpoint.
+To copy existing local resume objects to R2 while preserving their storage keys:
+
+```sh
+go run ./cmd/migrate-resumes
+```
+
+The command verifies every uploaded object and keeps the local files intact.
 
 Security expectations:
 
@@ -123,7 +167,7 @@ Run the API:
 go run ./cmd/server
 ```
 
-Run the Vue app from `../legal-bench` in a second terminal:
+Run the Vue app from `../legal-roster` in a second terminal:
 
 ```sh
 pnpm dev
@@ -136,7 +180,7 @@ The Vue dev server proxies `/api` requests to `http://localhost:8080`.
 Build the Vue app first:
 
 ```sh
-cd ../legal-bench
+cd ../legal-roster
 pnpm build
 ```
 
@@ -153,9 +197,6 @@ Set `DATABASE_URL` to your managed Postgres connection string in production.
 ## Endpoints
 
 - `GET /api/health`
-- `POST /api/auth/login`
-- `POST /api/auth/logout`
-- `POST /api/auth/activate`
 - `GET /api/auth/me`
 - `GET /api/candidates`
 - `POST /api/candidates`
@@ -168,7 +209,6 @@ Set `DATABASE_URL` to your managed Postgres connection string in production.
 - `PATCH /api/admin/applicants/{id}/status`
 - `POST /api/admin/applicants/{id}/hire`
 - `GET /api/admin/users`
-- `POST /api/admin/users/invitations`
 - `PATCH /api/admin/users/{id}/role`
 - `PATCH /api/admin/users/{id}/status`
 
@@ -177,3 +217,17 @@ Set `DATABASE_URL` to your managed Postgres connection string in production.
 ```sh
 go test ./...
 ```
+
+## GitHub Actions and Render
+
+The API workflow provisions PostgreSQL 17, applies every Goose migration, runs
+the Go tests, and builds the server. On successful pushes to `main`, it then
+applies pending migrations to production Supabase and triggers a Render deploy.
+Pull requests run verification without modifying production or deploying.
+
+In this GitHub repository, create a production environment and add the secret
+`PRODUCTION_DATABASE_URL` using the Supabase session pooler connection string on
+port `5432`. Add `RENDER_DEPLOY_HOOK_URL` using the deploy hook from the API's
+Render service. Consider requiring reviewers on the production environment.
+Disable Render's automatic Git deploys so an unverified push cannot bypass the
+GitHub Actions gate.

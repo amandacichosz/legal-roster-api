@@ -10,75 +10,17 @@ import (
 	"time"
 )
 
-const listJobPostings = `-- name: ListJobPostings :many
-SELECT
-	job_postings.id,
-	job_postings.title,
-	job_postings.slug,
-	job_postings.department,
-	job_postings.location,
-	job_postings.employment_type,
-	job_postings.summary,
-	job_postings.description,
-	job_postings.requirements,
-	job_postings.is_active,
-	job_postings.created_at,
-	job_postings.updated_at,
-	COUNT(job_applications.id)::bigint AS application_count
-FROM job_postings
-LEFT JOIN job_applications ON job_applications.job_posting_id = job_postings.id
-GROUP BY job_postings.id
-ORDER BY job_postings.created_at DESC, job_postings.id DESC
+const countJobApplications = `-- name: CountJobApplications :one
+SELECT COUNT(*)::bigint
+FROM job_applications
+WHERE ($1::text = '' OR status = $1::text)
 `
 
-type ListJobPostingsRow struct {
-	ID               int64     `json:"id"`
-	Title            string    `json:"title"`
-	Slug             string    `json:"slug"`
-	Department       string    `json:"department"`
-	Location         string    `json:"location"`
-	EmploymentType   string    `json:"employment_type"`
-	Summary          string    `json:"summary"`
-	Description      string    `json:"description"`
-	Requirements     string    `json:"requirements"`
-	IsActive         bool      `json:"is_active"`
-	CreatedAt        time.Time `json:"created_at"`
-	UpdatedAt        time.Time `json:"updated_at"`
-	ApplicationCount int64     `json:"application_count"`
-}
-
-func (q *Queries) ListJobPostings(ctx context.Context) ([]ListJobPostingsRow, error) {
-	rows, err := q.db.Query(ctx, listJobPostings)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []ListJobPostingsRow{}
-	for rows.Next() {
-		var i ListJobPostingsRow
-		if err := rows.Scan(
-			&i.ID,
-			&i.Title,
-			&i.Slug,
-			&i.Department,
-			&i.Location,
-			&i.EmploymentType,
-			&i.Summary,
-			&i.Description,
-			&i.Requirements,
-			&i.IsActive,
-			&i.CreatedAt,
-			&i.UpdatedAt,
-			&i.ApplicationCount,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
+func (q *Queries) CountJobApplications(ctx context.Context, status string) (int64, error) {
+	row := q.db.QueryRow(ctx, countJobApplications, status)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
 }
 
 const createJobApplication = `-- name: CreateJobApplication :one
@@ -151,6 +93,16 @@ func (q *Queries) CreateJobApplication(ctx context.Context, arg CreateJobApplica
 	return i, err
 }
 
+const deleteJobApplication = `-- name: DeleteJobApplication :exec
+DELETE FROM job_applications
+WHERE id = $1
+`
+
+func (q *Queries) DeleteJobApplication(ctx context.Context, id int64) error {
+	_, err := q.db.Exec(ctx, deleteJobApplication, id)
+	return err
+}
+
 const getJobApplicationForHire = `-- name: GetJobApplicationForHire :one
 SELECT
 	job_applications.id,
@@ -202,16 +154,6 @@ func (q *Queries) GetJobApplicationForHire(ctx context.Context, id int64) (GetJo
 	return i, err
 }
 
-const deleteJobApplication = `-- name: DeleteJobApplication :exec
-DELETE FROM job_applications
-WHERE id = $1
-`
-
-func (q *Queries) DeleteJobApplication(ctx context.Context, id int64) error {
-	_, err := q.db.Exec(ctx, deleteJobApplication, id)
-	return err
-}
-
 const getJobPostingBySlug = `-- name: GetJobPostingBySlug :one
 SELECT id, title, slug, department, location, employment_type, summary, description, requirements, is_active, created_at, updated_at
 FROM job_postings
@@ -256,15 +198,15 @@ SELECT
 	job_applications.updated_at
 FROM job_applications
 JOIN job_postings ON job_postings.id = job_applications.job_posting_id
-WHERE ($1 = '' OR job_applications.status = $1)
+WHERE ($1::text = '' OR job_applications.status = $1::text)
 ORDER BY job_applications.created_at DESC, job_applications.id DESC
-LIMIT $2 OFFSET $3
+LIMIT $3 OFFSET $2
 `
 
 type ListJobApplicationsParams struct {
-	Status string `json:"status"`
-	Limit  int32  `json:"limit"`
-	Offset int32  `json:"offset"`
+	Status     string `json:"status"`
+	PageOffset int32  `json:"page_offset"`
+	PageLimit  int32  `json:"page_limit"`
 }
 
 type ListJobApplicationsRow struct {
@@ -285,7 +227,7 @@ type ListJobApplicationsRow struct {
 }
 
 func (q *Queries) ListJobApplications(ctx context.Context, arg ListJobApplicationsParams) ([]ListJobApplicationsRow, error) {
-	rows, err := q.db.Query(ctx, listJobApplications, arg.Status, arg.Limit, arg.Offset)
+	rows, err := q.db.Query(ctx, listJobApplications, arg.Status, arg.PageOffset, arg.PageLimit)
 	if err != nil {
 		return nil, err
 	}
@@ -319,17 +261,75 @@ func (q *Queries) ListJobApplications(ctx context.Context, arg ListJobApplicatio
 	return items, nil
 }
 
-const countJobApplications = `-- name: CountJobApplications :one
-SELECT COUNT(*)::bigint
-FROM job_applications
-WHERE ($1 = '' OR status = $1)
+const listJobPostings = `-- name: ListJobPostings :many
+SELECT
+	job_postings.id,
+	job_postings.title,
+	job_postings.slug,
+	job_postings.department,
+	job_postings.location,
+	job_postings.employment_type,
+	job_postings.summary,
+	job_postings.description,
+	job_postings.requirements,
+	job_postings.is_active,
+	job_postings.created_at,
+	job_postings.updated_at,
+	COUNT(job_applications.id)::bigint AS application_count
+FROM job_postings
+LEFT JOIN job_applications ON job_applications.job_posting_id = job_postings.id
+GROUP BY job_postings.id
+ORDER BY job_postings.created_at DESC, job_postings.id DESC
 `
 
-func (q *Queries) CountJobApplications(ctx context.Context, status string) (int64, error) {
-	row := q.db.QueryRow(ctx, countJobApplications, status)
-	var count int64
-	err := row.Scan(&count)
-	return count, err
+type ListJobPostingsRow struct {
+	ID               int64     `json:"id"`
+	Title            string    `json:"title"`
+	Slug             string    `json:"slug"`
+	Department       string    `json:"department"`
+	Location         string    `json:"location"`
+	EmploymentType   string    `json:"employment_type"`
+	Summary          string    `json:"summary"`
+	Description      string    `json:"description"`
+	Requirements     string    `json:"requirements"`
+	IsActive         bool      `json:"is_active"`
+	CreatedAt        time.Time `json:"created_at"`
+	UpdatedAt        time.Time `json:"updated_at"`
+	ApplicationCount int64     `json:"application_count"`
+}
+
+func (q *Queries) ListJobPostings(ctx context.Context) ([]ListJobPostingsRow, error) {
+	rows, err := q.db.Query(ctx, listJobPostings)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListJobPostingsRow{}
+	for rows.Next() {
+		var i ListJobPostingsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Title,
+			&i.Slug,
+			&i.Department,
+			&i.Location,
+			&i.EmploymentType,
+			&i.Summary,
+			&i.Description,
+			&i.Requirements,
+			&i.IsActive,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.ApplicationCount,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const updateJobApplicationStatus = `-- name: UpdateJobApplicationStatus :one

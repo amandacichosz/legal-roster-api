@@ -7,81 +7,25 @@ package db
 
 import (
 	"context"
-	"time"
 )
 
-const acceptUserInvitation = `-- name: AcceptUserInvitation :one
-UPDATE user_invitations
-SET accepted_by = $1::bigint, accepted_at = NOW()
-WHERE id = $2 AND accepted_at IS NULL
-RETURNING id, email, name, role, token_hash, invited_by, accepted_by, expires_at, accepted_at, created_at
-`
-
-type AcceptUserInvitationParams struct {
-	AcceptedBy int64 `json:"accepted_by"`
-	ID         int64 `json:"id"`
-}
-
-func (q *Queries) AcceptUserInvitation(ctx context.Context, arg AcceptUserInvitationParams) (UserInvitation, error) {
-	row := q.db.QueryRow(ctx, acceptUserInvitation, arg.AcceptedBy, arg.ID)
-	var i UserInvitation
-	err := row.Scan(
-		&i.ID,
-		&i.Email,
-		&i.Name,
-		&i.Role,
-		&i.TokenHash,
-		&i.InvitedBy,
-		&i.AcceptedBy,
-		&i.ExpiresAt,
-		&i.AcceptedAt,
-		&i.CreatedAt,
-	)
-	return i, err
-}
-
-const createSession = `-- name: CreateSession :one
-INSERT INTO sessions (user_id, token_hash, expires_at)
-VALUES ($1, $2, $3)
-RETURNING id, user_id, token_hash, expires_at, created_at
-`
-
-type CreateSessionParams struct {
-	UserID    int64     `json:"user_id"`
-	TokenHash string    `json:"token_hash"`
-	ExpiresAt time.Time `json:"expires_at"`
-}
-
-func (q *Queries) CreateSession(ctx context.Context, arg CreateSessionParams) (Session, error) {
-	row := q.db.QueryRow(ctx, createSession, arg.UserID, arg.TokenHash, arg.ExpiresAt)
-	var i Session
-	err := row.Scan(
-		&i.ID,
-		&i.UserID,
-		&i.TokenHash,
-		&i.ExpiresAt,
-		&i.CreatedAt,
-	)
-	return i, err
-}
-
 const createUser = `-- name: CreateUser :one
-INSERT INTO users (email, password_hash, name, role)
-VALUES (LOWER($1), $2, $3, $4)
-RETURNING id, email, password_hash, name, role, status, created_at, updated_at
+INSERT INTO users (id, email, name, role)
+VALUES ($1, LOWER($2), $3, $4)
+RETURNING id, email, name, role, status, created_at, updated_at
 `
 
 type CreateUserParams struct {
-	Email        string `json:"email"`
-	PasswordHash string `json:"password_hash"`
-	Name         string `json:"name"`
-	Role         string `json:"role"`
+	ID    string `json:"id"`
+	Email string `json:"email"`
+	Name  string `json:"name"`
+	Role  string `json:"role"`
 }
 
 func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (User, error) {
 	row := q.db.QueryRow(ctx, createUser,
+		arg.ID,
 		arg.Email,
-		arg.PasswordHash,
 		arg.Name,
 		arg.Role,
 	)
@@ -89,7 +33,6 @@ func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (User, e
 	err := row.Scan(
 		&i.ID,
 		&i.Email,
-		&i.PasswordHash,
 		&i.Name,
 		&i.Role,
 		&i.Status,
@@ -99,94 +42,8 @@ func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (User, e
 	return i, err
 }
 
-const createUserInvitation = `-- name: CreateUserInvitation :one
-INSERT INTO user_invitations (email, name, role, token_hash, invited_by, expires_at)
-VALUES (
-	LOWER($1),
-	$2,
-	$3,
-	$4,
-	$5,
-	$6
-)
-RETURNING id, email, name, role, token_hash, invited_by, accepted_by, expires_at, accepted_at, created_at
-`
-
-type CreateUserInvitationParams struct {
-	Email     string    `json:"email"`
-	Name      string    `json:"name"`
-	Role      string    `json:"role"`
-	TokenHash string    `json:"token_hash"`
-	InvitedBy int64     `json:"invited_by"`
-	ExpiresAt time.Time `json:"expires_at"`
-}
-
-func (q *Queries) CreateUserInvitation(ctx context.Context, arg CreateUserInvitationParams) (UserInvitation, error) {
-	row := q.db.QueryRow(ctx, createUserInvitation,
-		arg.Email,
-		arg.Name,
-		arg.Role,
-		arg.TokenHash,
-		arg.InvitedBy,
-		arg.ExpiresAt,
-	)
-	var i UserInvitation
-	err := row.Scan(
-		&i.ID,
-		&i.Email,
-		&i.Name,
-		&i.Role,
-		&i.TokenHash,
-		&i.InvitedBy,
-		&i.AcceptedBy,
-		&i.ExpiresAt,
-		&i.AcceptedAt,
-		&i.CreatedAt,
-	)
-	return i, err
-}
-
-const deleteExpiredSessions = `-- name: DeleteExpiredSessions :exec
-DELETE FROM sessions
-WHERE expires_at <= NOW()
-`
-
-func (q *Queries) DeleteExpiredSessions(ctx context.Context) error {
-	_, err := q.db.Exec(ctx, deleteExpiredSessions)
-	return err
-}
-
-const deleteSessionByTokenHash = `-- name: DeleteSessionByTokenHash :exec
-DELETE FROM sessions
-WHERE token_hash = $1
-`
-
-func (q *Queries) DeleteSessionByTokenHash(ctx context.Context, tokenHash string) error {
-	_, err := q.db.Exec(ctx, deleteSessionByTokenHash, tokenHash)
-	return err
-}
-
-const getSessionByTokenHash = `-- name: GetSessionByTokenHash :one
-SELECT id, user_id, token_hash, expires_at, created_at
-FROM sessions
-WHERE token_hash = $1 AND expires_at > NOW()
-`
-
-func (q *Queries) GetSessionByTokenHash(ctx context.Context, tokenHash string) (Session, error) {
-	row := q.db.QueryRow(ctx, getSessionByTokenHash, tokenHash)
-	var i Session
-	err := row.Scan(
-		&i.ID,
-		&i.UserID,
-		&i.TokenHash,
-		&i.ExpiresAt,
-		&i.CreatedAt,
-	)
-	return i, err
-}
-
 const getUserByEmail = `-- name: GetUserByEmail :one
-SELECT id, email, password_hash, name, role, status, created_at, updated_at
+SELECT id, email, name, role, status, created_at, updated_at
 FROM users
 WHERE LOWER(email) = LOWER($1)
 `
@@ -197,7 +54,6 @@ func (q *Queries) GetUserByEmail(ctx context.Context, lower string) (User, error
 	err := row.Scan(
 		&i.ID,
 		&i.Email,
-		&i.PasswordHash,
 		&i.Name,
 		&i.Role,
 		&i.Status,
@@ -208,18 +64,17 @@ func (q *Queries) GetUserByEmail(ctx context.Context, lower string) (User, error
 }
 
 const getUserByID = `-- name: GetUserByID :one
-SELECT id, email, password_hash, name, role, status, created_at, updated_at
+SELECT id, email, name, role, status, created_at, updated_at
 FROM users
 WHERE id = $1
 `
 
-func (q *Queries) GetUserByID(ctx context.Context, id int64) (User, error) {
+func (q *Queries) GetUserByID(ctx context.Context, id string) (User, error) {
 	row := q.db.QueryRow(ctx, getUserByID, id)
 	var i User
 	err := row.Scan(
 		&i.ID,
 		&i.Email,
-		&i.PasswordHash,
 		&i.Name,
 		&i.Role,
 		&i.Status,
@@ -229,32 +84,8 @@ func (q *Queries) GetUserByID(ctx context.Context, id int64) (User, error) {
 	return i, err
 }
 
-const getUserInvitationByTokenHash = `-- name: GetUserInvitationByTokenHash :one
-SELECT id, email, name, role, token_hash, invited_by, accepted_by, expires_at, accepted_at, created_at
-FROM user_invitations
-WHERE token_hash = $1 AND accepted_at IS NULL AND expires_at > NOW()
-`
-
-func (q *Queries) GetUserInvitationByTokenHash(ctx context.Context, tokenHash string) (UserInvitation, error) {
-	row := q.db.QueryRow(ctx, getUserInvitationByTokenHash, tokenHash)
-	var i UserInvitation
-	err := row.Scan(
-		&i.ID,
-		&i.Email,
-		&i.Name,
-		&i.Role,
-		&i.TokenHash,
-		&i.InvitedBy,
-		&i.AcceptedBy,
-		&i.ExpiresAt,
-		&i.AcceptedAt,
-		&i.CreatedAt,
-	)
-	return i, err
-}
-
 const listUsers = `-- name: ListUsers :many
-SELECT id, email, password_hash, name, role, status, created_at, updated_at
+SELECT id, email, name, role, status, created_at, updated_at
 FROM users
 ORDER BY created_at DESC, id DESC
 `
@@ -271,7 +102,6 @@ func (q *Queries) ListUsers(ctx context.Context) ([]User, error) {
 		if err := rows.Scan(
 			&i.ID,
 			&i.Email,
-			&i.PasswordHash,
 			&i.Name,
 			&i.Role,
 			&i.Status,
@@ -292,11 +122,11 @@ const updateUserRole = `-- name: UpdateUserRole :one
 UPDATE users
 SET role = $2, updated_at = NOW()
 WHERE id = $1
-RETURNING id, email, password_hash, name, role, status, created_at, updated_at
+RETURNING id, email, name, role, status, created_at, updated_at
 `
 
 type UpdateUserRoleParams struct {
-	ID   int64  `json:"id"`
+	ID   string `json:"id"`
 	Role string `json:"role"`
 }
 
@@ -306,7 +136,6 @@ func (q *Queries) UpdateUserRole(ctx context.Context, arg UpdateUserRoleParams) 
 	err := row.Scan(
 		&i.ID,
 		&i.Email,
-		&i.PasswordHash,
 		&i.Name,
 		&i.Role,
 		&i.Status,
@@ -320,11 +149,11 @@ const updateUserStatus = `-- name: UpdateUserStatus :one
 UPDATE users
 SET status = $2, updated_at = NOW()
 WHERE id = $1
-RETURNING id, email, password_hash, name, role, status, created_at, updated_at
+RETURNING id, email, name, role, status, created_at, updated_at
 `
 
 type UpdateUserStatusParams struct {
-	ID     int64  `json:"id"`
+	ID     string `json:"id"`
 	Status string `json:"status"`
 }
 
@@ -334,7 +163,6 @@ func (q *Queries) UpdateUserStatus(ctx context.Context, arg UpdateUserStatusPara
 	err := row.Scan(
 		&i.ID,
 		&i.Email,
-		&i.PasswordHash,
 		&i.Name,
 		&i.Role,
 		&i.Status,

@@ -17,7 +17,6 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -28,10 +27,10 @@ import (
 )
 
 const (
-	sessionDuration    = 7 * 24 * time.Hour
-	invitationDuration = 7 * 24 * time.Hour
-	platformAdminRole  = "platform_admin"
-	maxResumeBytes     = 5 << 20
+	platformAdminRole = "platform_admin"
+	adminRole         = "admin"
+	userRole          = "user"
+	maxResumeBytes    = 5 << 20
 )
 
 type contextKey string
@@ -53,6 +52,7 @@ type Server struct {
 	cookieSecure bool
 	emailSender  EmailSender
 	resumeStore  objectstore.Store
+	authVerifier auth.SupabaseVerifier
 }
 
 type CandidateRequest struct {
@@ -99,8 +99,12 @@ type UpdateUserRoleRequest struct {
 	Role string `json:"role"`
 }
 
+type UpdateUserStatusRequest struct {
+	Status string `json:"status"`
+}
+
 type currentUserResponse struct {
-	ID     int64  `json:"id"`
+	ID     string `json:"id"`
 	Email  string `json:"email"`
 	Name   string `json:"name"`
 	Role   string `json:"role"`
@@ -164,7 +168,7 @@ type invitationResponse struct {
 	ActivationURL string    `json:"activation_url"`
 }
 
-func New(pool *pgxpool.Pool, staticDir string, corsOrigins string, frontendURL string, cookieSecure bool, emailSender EmailSender, resumeStore objectstore.Store, logger *slog.Logger) http.Handler {
+func New(pool *pgxpool.Pool, staticDir string, corsOrigins string, frontendURL string, cookieSecure bool, emailSender EmailSender, resumeStore objectstore.Store, supabaseURL string, supabasePublishableKey string, logger *slog.Logger) http.Handler {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -179,12 +183,10 @@ func New(pool *pgxpool.Pool, staticDir string, corsOrigins string, frontendURL s
 		cookieSecure: cookieSecure,
 		emailSender:  emailSender,
 		resumeStore:  resumeStore,
+		authVerifier: auth.SupabaseVerifier{URL: supabaseURL, PublishableKey: supabasePublishableKey},
 	}
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("POST /api/auth/login", server.login)
-	mux.HandleFunc("POST /api/auth/logout", server.logout)
-	mux.HandleFunc("POST /api/auth/activate", server.activate)
 	mux.HandleFunc("GET /api/auth/me", server.requireAuth(server.me))
 	mux.HandleFunc("GET /api/health", server.health)
 	mux.HandleFunc("GET /api/candidates", server.requireAuth(server.listCandidates))
@@ -198,7 +200,6 @@ func New(pool *pgxpool.Pool, staticDir string, corsOrigins string, frontendURL s
 	mux.HandleFunc("POST /api/admin/applicants/{id}/hire", server.requirePlatformAdmin(server.hireJobApplicant))
 	mux.HandleFunc("GET /api/admin/resumes/{publicID}/download", server.requirePlatformAdmin(server.downloadResume))
 	mux.HandleFunc("GET /api/admin/users", server.requirePlatformAdmin(server.listUsers))
-	mux.HandleFunc("POST /api/admin/users/invitations", server.requirePlatformAdmin(server.inviteUser))
 	mux.HandleFunc("PATCH /api/admin/users/{id}/role", server.requirePlatformAdmin(server.updateUserRole))
 	mux.HandleFunc("PATCH /api/admin/users/{id}/status", server.requirePlatformAdmin(server.updateUserStatus))
 	mux.HandleFunc("/api/", server.notFound)
@@ -228,80 +229,6 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "database": dbStatus})
 }
 
-func (s *Server) login(w http.ResponseWriter, r *http.Request) {
-	var request AuthRequest
-	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON body")
-		return
-	}
-
-	request.Email = strings.TrimSpace(strings.ToLower(request.Email))
-	if request.Email == "" || request.Password == "" {
-		writeError(w, http.StatusBadRequest, "email and password are required")
-		return
-	}
-
-	user, err := s.queries.GetUserByEmail(r.Context(), request.Email)
-	if err != nil || !auth.CheckPassword(request.Password, user.PasswordHash) || user.Status != "active" {
-		writeError(w, http.StatusUnauthorized, "invalid email or password")
-		return
-	}
-
-	s.writeSession(w, r, user)
-}
-
-func (s *Server) activate(w http.ResponseWriter, r *http.Request) {
-	var request ActivateRequest
-	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON body")
-		return
-	}
-	if request.Token == "" || len(request.Password) < 12 {
-		writeError(w, http.StatusBadRequest, "token and a password of at least 12 characters are required")
-		return
-	}
-
-	invitation, err := s.queries.GetUserInvitationByTokenHash(r.Context(), auth.HashSessionToken(request.Token))
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invitation is invalid or expired")
-		return
-	}
-
-	passwordHash, err := auth.HashPassword(request.Password)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not activate account")
-		return
-	}
-
-	user, err := s.queries.CreateUser(r.Context(), db.CreateUserParams{
-		Email:        invitation.Email,
-		PasswordHash: passwordHash,
-		Name:         invitation.Name,
-		Role:         invitation.Role,
-	})
-	if err != nil {
-		var pgErr *pgconn.PgError
-		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
-			writeError(w, http.StatusConflict, "user already exists")
-			return
-		}
-		writeError(w, http.StatusInternalServerError, "could not activate account")
-		return
-	}
-
-	_, _ = s.queries.AcceptUserInvitation(r.Context(), db.AcceptUserInvitationParams{ID: invitation.ID, AcceptedBy: user.ID})
-	s.writeSession(w, r, user)
-}
-
-func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
-	cookie, err := r.Cookie(auth.SessionCookieName)
-	if err == nil && cookie.Value != "" {
-		_ = s.queries.DeleteSessionByTokenHash(r.Context(), auth.HashSessionToken(cookie.Value))
-	}
-	http.SetCookie(w, auth.ExpiredSessionCookie(s.cookieSecure))
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
-}
-
 func (s *Server) me(w http.ResponseWriter, r *http.Request) {
 	user, ok := currentUserFromContext(r.Context())
 	if !ok {
@@ -324,64 +251,9 @@ func (s *Server) listUsers(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, responses)
 }
 
-func (s *Server) inviteUser(w http.ResponseWriter, r *http.Request) {
-	currentUser, _ := currentUserFromContext(r.Context())
-	var request InviteUserRequest
-	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON body")
-		return
-	}
-	request.Email = strings.TrimSpace(strings.ToLower(request.Email))
-	request.Name = strings.TrimSpace(request.Name)
-	request.Role = strings.TrimSpace(request.Role)
-	if err := validateInvitation(request); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	if _, err := s.queries.GetUserByEmail(r.Context(), request.Email); err == nil {
-		writeError(w, http.StatusConflict, "user already exists")
-		return
-	} else if !errors.Is(err, pgx.ErrNoRows) {
-		writeError(w, http.StatusInternalServerError, "could not check user")
-		return
-	}
-
-	token, err := auth.NewSessionToken()
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not create invitation")
-		return
-	}
-	expiresAt := time.Now().Add(invitationDuration)
-	invitation, err := s.queries.CreateUserInvitation(r.Context(), db.CreateUserInvitationParams{
-		Email:     request.Email,
-		Name:      request.Name,
-		Role:      request.Role,
-		TokenHash: auth.HashSessionToken(token),
-		InvitedBy: currentUser.ID,
-		ExpiresAt: expiresAt,
-	})
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not create invitation")
-		return
-	}
-
-	activationURL := s.activationURL(token)
-	if s.emailSender != nil && s.emailSender.Configured() {
-		if err := s.emailSender.SendActivation(invitation.Email, invitation.Name, activationURL); err != nil {
-			s.logger.Error("send activation email", "email", invitation.Email, "error", err)
-			writeError(w, http.StatusInternalServerError, "invitation created but email could not be sent")
-			return
-		}
-		s.logger.Info("user invitation email sent", "email", invitation.Email)
-	} else {
-		s.logger.Info("user invitation created", "email", invitation.Email, "activation_url", activationURL)
-	}
-	writeJSON(w, http.StatusCreated, invitationResponse{ID: invitation.ID, Email: invitation.Email, Name: invitation.Name, Role: invitation.Role, ExpiresAt: invitation.ExpiresAt, ActivationURL: activationURL})
-}
-
 func (s *Server) updateUserRole(w http.ResponseWriter, r *http.Request) {
-	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	if err != nil {
+	id := strings.TrimSpace(r.PathValue("id"))
+	if !validUUID(id) {
 		writeError(w, http.StatusBadRequest, "invalid user id")
 		return
 	}
@@ -405,16 +277,26 @@ func (s *Server) updateUserRole(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) updateUserStatus(w http.ResponseWriter, r *http.Request) {
 	currentUser, _ := currentUserFromContext(r.Context())
-	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	if err != nil {
+	id := strings.TrimSpace(r.PathValue("id"))
+	if !validUUID(id) {
 		writeError(w, http.StatusBadRequest, "invalid user id")
 		return
 	}
-	if id == currentUser.ID {
+	var request UpdateUserStatusRequest
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	request.Status = strings.TrimSpace(request.Status)
+	if request.Status != "active" && request.Status != "disabled" {
+		writeError(w, http.StatusBadRequest, "status must be active or disabled")
+		return
+	}
+	if id == currentUser.ID && request.Status == "disabled" {
 		writeError(w, http.StatusBadRequest, "you cannot disable your own account")
 		return
 	}
-	user, err := s.queries.UpdateUserStatus(r.Context(), db.UpdateUserStatusParams{ID: id, Status: "disabled"})
+	user, err := s.queries.UpdateUserStatus(r.Context(), db.UpdateUserStatusParams{ID: id, Status: request.Status})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not disable user")
 		return
@@ -510,9 +392,9 @@ func (s *Server) listJobApplications(w http.ResponseWriter, r *http.Request) {
 	offset := (page - 1) * pageSize
 
 	applications, err := s.queries.ListJobApplications(r.Context(), db.ListJobApplicationsParams{
-		Status: status,
-		Limit:  pageSize,
-		Offset: offset,
+		Status:     status,
+		PageLimit:  pageSize,
+		PageOffset: offset,
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not load applicants")
@@ -967,22 +849,6 @@ func sanitizeResumeFilename(filename string) string {
 	return cleaned
 }
 
-func (s *Server) writeSession(w http.ResponseWriter, r *http.Request, user db.User) {
-	token, err := auth.NewSessionToken()
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not create session")
-		return
-	}
-	expiresAt := time.Now().Add(sessionDuration)
-	_, err = s.queries.CreateSession(r.Context(), db.CreateSessionParams{UserID: user.ID, TokenHash: auth.HashSessionToken(token), ExpiresAt: expiresAt})
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not create session")
-		return
-	}
-	http.SetCookie(w, auth.SessionCookie(token, expiresAt, s.cookieSecure))
-	writeJSON(w, http.StatusOK, toCurrentUserResponse(user))
-}
-
 func (s *Server) requireAuth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		user, ok := s.authenticateRequest(w, r)
@@ -996,8 +862,8 @@ func (s *Server) requireAuth(next http.HandlerFunc) http.HandlerFunc {
 func (s *Server) requirePlatformAdmin(next http.HandlerFunc) http.HandlerFunc {
 	return s.requireAuth(func(w http.ResponseWriter, r *http.Request) {
 		user, _ := currentUserFromContext(r.Context())
-		if user.Role != platformAdminRole {
-			writeError(w, http.StatusForbidden, "platform admin access required")
+		if user.Role != platformAdminRole && user.Role != adminRole {
+			writeError(w, http.StatusForbidden, "admin access required")
 			return
 		}
 		next.ServeHTTP(w, r)
@@ -1005,30 +871,23 @@ func (s *Server) requirePlatformAdmin(next http.HandlerFunc) http.HandlerFunc {
 }
 
 func (s *Server) authenticateRequest(w http.ResponseWriter, r *http.Request) (db.User, bool) {
-	cookie, err := r.Cookie(auth.SessionCookieName)
-	if err != nil || cookie.Value == "" {
+	authorization := strings.TrimSpace(r.Header.Get("Authorization"))
+	const bearerPrefix = "Bearer "
+	if !strings.HasPrefix(authorization, bearerPrefix) {
 		writeError(w, http.StatusUnauthorized, "authentication required")
 		return db.User{}, false
 	}
-	session, err := s.queries.GetSessionByTokenHash(r.Context(), auth.HashSessionToken(cookie.Value))
+	supabaseUser, err := s.authVerifier.Verify(r.Context(), strings.TrimSpace(strings.TrimPrefix(authorization, bearerPrefix)))
 	if err != nil {
 		writeError(w, http.StatusUnauthorized, "authentication required")
 		return db.User{}, false
 	}
-	user, err := s.queries.GetUserByID(r.Context(), session.UserID)
+	user, err := s.queries.GetUserByID(r.Context(), supabaseUser.ID)
 	if err != nil || user.Status != "active" {
 		writeError(w, http.StatusUnauthorized, "authentication required")
 		return db.User{}, false
 	}
 	return user, true
-}
-
-func (s *Server) activationURL(token string) string {
-	frontendURL := s.frontendURL
-	if frontendURL == "" {
-		frontendURL = "http://localhost:5173"
-	}
-	return fmt.Sprintf("%s/activate?token=%s", frontendURL, url.QueryEscape(token))
 }
 
 func (s *Server) notFound(w http.ResponseWriter, r *http.Request) {
@@ -1227,11 +1086,16 @@ func validateInvitation(request InviteUserRequest) error {
 
 func validRole(role string) bool {
 	switch role {
-	case "platform_admin", "admin", "law_firm_user", "contractor", "reviewer":
+	case platformAdminRole, adminRole, userRole:
 		return true
 	default:
 		return false
 	}
+}
+
+func validUUID(value string) bool {
+	var id pgtype.UUID
+	return id.Scan(value) == nil && id.Valid
 }
 
 func validateCandidate(candidate CandidateRequest) error {
