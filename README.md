@@ -221,7 +221,7 @@ go test ./...
 ## GitHub Actions and Render
 
 The API workflow provisions PostgreSQL 17, applies every Goose migration, runs
-the Go tests, and builds the server. On successful pushes to `main`, it then
+the Go tests, and builds the server. On successful pushes to `master`, it then
 applies pending migrations to production Supabase and triggers a Render deploy.
 Pull requests run verification without modifying production or deploying.
 

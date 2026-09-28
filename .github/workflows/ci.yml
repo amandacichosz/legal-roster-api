@@ -2,9 +2,9 @@ name: CI and deploy
 
 on:
   pull_request:
-    branches: [main]
+    branches: [master]
   push:
-    branches: [main]
+    branches: [master]
   workflow_dispatch:
 
 permissions:
@@ -84,7 +84,7 @@ jobs:
 
   migrate-production:
     name: Migrate production database
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
     needs: verify
     runs-on: ubuntu-latest
     environment: production
@@ -113,7 +113,7 @@ jobs:
 
   deploy:
     name: Deploy to Render
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
     needs: migrate-production
     runs-on: ubuntu-latest
     environment: production
